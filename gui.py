@@ -8,11 +8,6 @@ from presets import save_preset, load_preset, list_presets
 from utils import estimate_entropy
 from pathlib import Path
 
-# ДОБАВЛЕНО: для генерации по фразе и API AniList
-from phrase import normalize_text, generate_password_from_seed
-from anime_api import fetch_anime_bundle
-import requests
-
 try:
     import pyperclip
     HAS_PYPERCLIP = True
@@ -149,36 +144,6 @@ class PasswordApp:
         self.requirement_label = tb.Label(lab_frame, text="Требование: —")
         self.requirement_label.pack(fill="x", padx=4, pady=(0,4))
 
-        # === Блок Аниме / Фраза (детерминированная генерация) ===
-        anime_frame = tb.Labelframe(left, text="Аниме / Фраза (детерминированная генерация)")
-        anime_frame.pack(fill="x", pady=6)
-
-        rowp = tb.Frame(anime_frame); rowp.pack(fill="x", pady=2)
-        tb.Label(rowp, text="Фраза / seed:").pack(side=LEFT)
-        self.seed_phrase_var = tk.StringVar(value="")
-        tb.Entry(rowp, textvariable=self.seed_phrase_var).pack(side=LEFT, padx=6, fill="x", expand=True)
-
-        rowt = tb.Frame(anime_frame); rowt.pack(fill="x", pady=2)
-        tb.Label(rowt, text="Title:").pack(side=LEFT)
-        self.anime_title_var = tk.StringVar(value="")
-        tb.Entry(rowt, textvariable=self.anime_title_var, width=20).pack(side=LEFT, padx=6)
-
-        rowc = tb.Frame(anime_frame); rowc.pack(fill="x", pady=2)
-        tb.Label(rowc, text="Character:").pack(side=LEFT)
-        self.anime_char_var = tk.StringVar(value="")
-        tb.Entry(rowc, textvariable=self.anime_char_var, width=20).pack(side=LEFT, padx=6)
-
-        rowg = tb.Frame(anime_frame); rowg.pack(fill="x", pady=2)
-        tb.Label(rowg, text="Genre (опц.):").pack(side=LEFT)
-        self.anime_genre_var = tk.StringVar(value="")
-        tb.Entry(rowg, textvariable=self.anime_genre_var, width=20).pack(side=LEFT, padx=6)
-
-        rowb = tb.Frame(anime_frame); rowb.pack(fill="x", pady=6)
-        tb.Button(rowb, text="Сгенерировать по фразе", bootstyle=PRIMARY,
-                  command=self.on_generate_by_phrase).pack(side=LEFT, padx=4)
-        tb.Button(rowb, text="Сгенерировать по аниме (AniList)", bootstyle=INFO,
-                  command=self.on_generate_by_anilist).pack(side=LEFT, padx=4)
-
         # Right panel
         right = tb.Frame(frame)
         right.pack(side=RIGHT, fill=BOTH, expand=True, padx=6, pady=6)
@@ -202,12 +167,6 @@ class PasswordApp:
         tb.Button(btns, text="Copy", command=self.on_copy).pack(side=LEFT, padx=6)
         tb.Button(btns, text="Clear", bootstyle=WARNING, command=self.on_clear).pack(side=LEFT, padx=6)
         tb.Button(btns, text="Export...", command=self.on_export).pack(side=RIGHT, padx=6)
-
-        templ = tb.Labelframe(right, text="Шаблон (необязательно)")
-        templ.pack(fill="x", padx=8, pady=6)
-        self.pattern_var = tk.StringVar()
-        tb.Entry(templ, textvariable=self.pattern_var).pack(fill="x", padx=8, pady=6)
-        tb.Label(templ, text="L=upper, l=lower, d=digit, s=symbol, *=any from alphabet").pack(anchor="w", padx=8)
 
         # key bindings
         root.bind("<Return>", lambda e: self.on_generate())
@@ -253,17 +212,6 @@ class PasswordApp:
         except Exception:
             self.requirement_label.config(text="Требование: —")
 
-    def _current_alphabet_and_length(self):
-        """Общий helper для режимов 'по фразе' и 'по AniList'."""
-        alphabet = self.build_alphabet_local()
-        try:
-            length = int(self.length_var.get())
-        except Exception:
-            length = DEFAULT_LEN
-        length = max(4, min(128, length))
-        self.length_var.set(length)
-        return alphabet, length
-
     def on_generate(self):
         self.update_stats()
         alphabet = self.build_alphabet_local()
@@ -286,53 +234,6 @@ class PasswordApp:
             self.password_entry.icursor(tk.END)
         finally:
             self.update_stats()
-
-    def on_generate_by_phrase(self):
-        alphabet, length = self._current_alphabet_and_length()
-        if not alphabet:
-            messagebox.showwarning("Алфавит пуст", "Выберите группы символов или введите пользовательский алфавит.")
-            return
-        seed = normalize_text(self.seed_phrase_var.get(), self.anime_title_var.get(),
-                              self.anime_char_var.get(), self.anime_genre_var.get())
-        if not seed:
-            messagebox.showwarning("Пустая фраза", "Введите фразу или данные аниме.")
-            return
-        pwd = generate_password_from_seed(alphabet, length, seed_text=seed, salt=None)
-        self.password_var.set(pwd)
-        self.password_entry.select_range(0, tk.END)
-        self.password_entry.icursor(tk.END)
-        self.update_stats()
-
-    def on_generate_by_anilist(self):
-        alphabet, length = self._current_alphabet_and_length()
-        if not alphabet:
-            messagebox.showwarning("Алфавит пуст", "Выберите группы символов или введите пользовательский алфавит.")
-            return
-
-        title = (self.anime_title_var.get() or "").strip() or None
-        char  = (self.anime_char_var.get() or "").strip() or None
-        if not title and not char:
-            messagebox.showwarning("Недостаточно данных", "Укажите хотя бы Title или Character.")
-            return
-
-        try:
-            bundle = fetch_anime_bundle(title=title, character=char)
-        except requests.HTTPError as e:
-            # Покажем текст GraphQL-ошибки, если есть
-            messagebox.showerror("AniList ошибка", f"{e}")
-            return
-        except requests.RequestException as e:
-            messagebox.showerror("AniList ошибка", f"Сеть/API: {e}")
-            return
-
-        if not bundle:
-            messagebox.showwarning("Не найдено", "По указанным полям ничего не найдено на AniList.")
-            return
-
-        # Можно усилить seed локальным жанром из поля, если введён
-        seed = (bundle.get("seed_text","") + " | " + (self.anime_genre_var.get() or "")).strip(" |")
-        from .phrase import generate_password_from_seed,_
-
 
     def on_copy(self):
         pwd = self.password_var.get()
@@ -382,7 +283,6 @@ class PasswordApp:
             "use_symbols": self.use_symbols.get(),
             "custom": self.custom_text.get("1.0", tk.END),
             "replace_only": self.replace_only.get(),
-            "pattern": self.pattern_var.get(),
         }
         try:
             p = Path(name)
@@ -411,7 +311,6 @@ class PasswordApp:
             self.custom_text.delete("1.0", tk.END)
             self.custom_text.insert("1.0", s.get("custom",""))
             self.replace_only.set(s.get("replace_only", False))
-            self.pattern_var.set(s.get("pattern",""))
             self.update_stats()
             messagebox.showinfo("Загружено", "Пресет загружен")
         except Exception as e:
